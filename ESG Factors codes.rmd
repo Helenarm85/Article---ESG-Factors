@@ -1,0 +1,549 @@
+---
+title: "ESG Factors codes"
+author: "Helena"
+date: "2025-12-08"
+output: pdf_document
+---
+
+# 1. Setup & Library Loading
+This section loads all necessary libraries and configures global options.
+
+```{r setup, include=FALSE}
+
+# # General Options
+# knitr::opts_chunk$set(
+# 	message = FALSE,
+# 	warning = FALSE,
+# 	include = FALSE
+# )
+# options(scipen = 999) # Avoid scientific notation
+
+# Data Manipulation & IO
+library(dplyr)
+library(readxl)
+library(haven)     # For .dta files
+library(stringr)   # For string manipulation
+library(lubridate) # For date handling
+library(tidyr)     # For pivoting data
+library(purrr)     # For functional programming (map, reduce)
+library(listviewer)# Optional: for viewing lists
+
+# Parallel Processing
+library(furrr)
+
+# Statistics & Econometrics
+library(zoo)       # For time series/rolling calculations
+library(pglm)      # Panel GLM
+library(plm)       # Panel Linear Models
+library(fixest)    # Fast Fixed Effects (feglm)
+library(bife)      # Binary Fixed Effects
+library(stargazer) # Output tables
+library(modelsummary) # Output tables in latex code
+
+
+# Visualization
+library(ggplot2)
+
+# Set up parallel processing plan (safe check for cores)
+# We use tryCatch to avoid errors on machines with few cores
+tryCatch({
+  plan(multisession, workers = max(1, availableCores() - 1))
+}, error = function(e) {
+  plan(sequential)
+})
+
+```
+
+2. Helper Functions
+
+We define all complex logic here to keep the main processing flow clean.
+
+```{r include=FALSE}
+# --- Function 1: Clean Excel Column Titles ---
+# Standardizes messy financial data headers into "Name YYYY-MM-DD" format
+limpar_titulo <- function(titulo) {
+  # Map months to numbers
+  mapa_meses <- c(
+    "Jan" = "01", "Fev" = "02", "Mar" = "03", "Abr" = "04", 
+    "Mai" = "05", "Jun" = "06", "Jul" = "07", "Ago" = "08", 
+    "Set" = "09", "Out" = "10", "Nov" = "11", "Dez" = "12"
+  )
+  
+  t <- trimws(gsub("\r\n", " ", titulo))
+  
+  # Patterns for regex
+  regex_old <- "^(.*)\\s*<\\s*([A-Za-zç]{3})\\s+(\\d{4}).*$" # Old format
+  regex_new <- "^(.*)\\s+(\\d{1,2})([A-Za-zç]{3})(\\d{2}).*$" # New format (e.g. 30Set24)
+  
+  if (grepl(regex_old, t)) {
+    partes <- regmatches(t, regexec(regex_old, t))[[1]]
+    if (length(partes) == 4) { 
+      mes_num <- mapa_meses[partes[3]]
+      if (!is.na(mes_num)) return(paste0(trimws(partes[2]), " ", partes[4], "-", mes_num, "-01"))
+    }
+  } else if (grepl(regex_new, t)) {
+    partes <- regmatches(t, regexec(regex_new, t))[[1]]
+    if (length(partes) == 5) {
+      mes_num <- mapa_meses[partes[4]]
+      if (!is.na(mes_num)) {
+        ano_completo <- paste0("20", partes[5])
+        dia_formatado <- sprintf("%02d", as.numeric(partes[3]))
+        return(paste0(trimws(partes[2]), " ", ano_completo, "-", mes_num, "-", dia_formatado))
+      }
+    }
+  }
+  return(t) # Return original if no match
+}
+
+# --- Function 2: Determine ESG Companies by Date ---
+# Logic: Checks fund holdings for a specific date and applies 5% cutoff rule
+obter_empresas_esg_por_data <- function(col_alvo, data_ref, lista_sheets) {
+  
+  # Filter funds that have data for this column
+  lista_processada <- lista_sheets %>%
+    imap(function(df, nome_sheet) {
+      if (col_alvo %in% names(df)) {
+        df %>%
+          filter(.data[[col_alvo]] > 0) %>%
+          select(1:5, all_of(col_alvo)) %>% 
+          mutate(Nome_Fundo = nome_sheet)
+      } else {
+        return(NULL)
+      }
+    }) %>%
+    compact()
+  
+  if (length(lista_processada) == 0) return(NULL)
+  
+  qtd_fundos_ativos_data <- length(lista_processada)
+  ativos_data <- list_rbind(lista_processada)
+  
+  # Calculate frequency of investment in stocks
+  ranking <- ativos_data %>%
+    filter(`Tipo de investimento` == "Ações") %>%
+    distinct(Nome_Fundo, Descrição) %>%
+    count(Descrição, name = "Qtd_Fundos_Investindo", sort = TRUE)
+  
+  # Cutoff rule (5% of active funds in that month)
+  corte_minimo <- qtd_fundos_ativos_data * 0.2  # 10%, 1% ou 20%
+  
+  empresas_esg <- ranking %>%
+    filter(Qtd_Fundos_Investindo >= corte_minimo)
+  
+  return(list(
+    data = data_ref,
+    total_fundos_ativos = qtd_fundos_ativos_data,
+    vetor_nomes = empresas_esg$Descrição
+  ))
+}
+
+# --- Function 3: Calculate 3-Year P/L Standard Deviation ---
+calcular_std_3anos <- function(ticker_alvo, data_corte, df_source) {
+  data_inicio <- data_corte - years(3)
+  
+  dados_historicos <- df_source %>%
+    filter(Código == ticker_alvo, Data_Ref >= data_inicio & Data_Ref < data_corte)
+  
+  if(nrow(dados_historicos) < 2) return(NA)
+  return(sd(dados_historicos$PL, na.rm = TRUE))
+}
+
+```
+
+
+3. Data Loading
+
+Importing all raw data sources at the start for better file management.
+```{r include=FALSE}
+# 1. Refinitiv ESG Data
+dados_esg <- read_dta("Refinitiv.esg.dta")
+
+# 2. Financial Indicators (Market Data)
+file_indicators <- "Indicadores financeiros acoes ibov. atualizado 04.12.25.xlsx"
+# Skip first 3 rows as per original logic
+indicadores_financeiros_ibov <- read_excel(file_indicators)
+
+# 3. Quarterly P/L Data (Economatica)
+file_pl <- "economatica_pl_dados_trimestrais.xlsx"
+df_pl_trimestral <- read_excel(file_pl, skip = 3)
+
+# 4. Funds Portfolio (Complex Excel with multiple sheets)
+filename_funds <- "Carteira atualizada 04.12.25 fundos ESG selecionados.xlsx"
+sheet_names <- excel_sheets(filename_funds)
+
+# Read all sheets in parallel
+all_sheets <- future_map(sheet_names, function(x) {
+  read_excel(filename_funds, sheet = x)
+})
+
+# Rename list elements based on Fund ID (from cell B1)
+fund_ids <- map_chr(all_sheets, ~ names(.x)[2])
+names(all_sheets) <- fund_ids
+
+print("All data loaded successfully.")
+```
+
+4. Processing Phase I: Fund Portfolios (The ESG Label)
+
+Here we standardize the fund sheets and determine which companies count as "ESG" for each month.
+
+```{r echo=FALSE}
+
+# 1. Clean Headers within each sheet
+for (sheet in names(all_sheets)){
+  df <- all_sheets[[sheet]]
+  
+  # Rename basic columns
+  colnames(df)[1] <- "Código_fundo"
+  colnames(df)[2] <- "Fundo"
+  
+  # Remove footer rows
+  df <- head(df, n = -7)
+  
+  # Fix Date Columns (Columns starting with numbers)
+  col_names <- colnames(df)
+  indices_alvo <- grep("^[0-9]", col_names)
+  
+  # Extract numeric dates from Excel headers
+  valores_limpos <- sub("\\..*", "", col_names[indices_alvo])
+  novas_datas <- as.character(as.Date(as.numeric(valores_limpos), origin = "1899-12-30"))
+  
+  # Combine Date + Row 1 Description
+  texto_linha_baixo <- as.character(df[1, indices_alvo])
+  novos_titulos <- paste(novas_datas, texto_linha_baixo, sep = " ")
+  
+  colnames(df)[indices_alvo] <- novos_titulos
+  
+  # Remove the row we just used for titles
+  all_sheets[[sheet]] <- df[-1, ]
+}
+
+# 2. Map Columns to Dates (Find the "Master" sheet structure)
+idx_max_cols <- which.max(map_int(all_sheets, ncol))
+colunas_mestra <- names(all_sheets[[idx_max_cols]])
+
+mapa_colunas_datas <- tibble(coluna_original = colunas_mestra) %>%
+  mutate(data_extraida = str_extract(coluna_original, "\\d{4}-\\d{2}-\\d{2}")) %>%
+  filter(!is.na(data_extraida)) %>%
+  distinct(data_extraida, .keep_all = TRUE) %>%
+  arrange(desc(data_extraida))
+
+# 3. Iterate to find ESG Companies for each date
+# This generates the list 'resultados_consolidados' used later for tagging
+resultados_consolidados <- mapa_colunas_datas %>%
+  pmap(function(coluna_original, data_extraida) {
+    obter_empresas_esg_por_data(coluna_original, data_extraida, all_sheets)
+  }) %>%
+  compact()
+
+names(resultados_consolidados) <- map_chr(resultados_consolidados, "data")
+print(paste("ESG classifications generated for", length(resultados_consolidados), "periods."))
+
+```
+
+5. Processing Phase II: Financial Indicators
+
+Here we clean the financial data and apply the "Backfill" logic to align financial reporting months with the ESG tags.
+
+```{r echo=FALSE}
+
+# 1. Clean Column Headers
+# Extract header row (simulated logic from original code)
+meus_titulos <- indicadores_financeiros_ibov[-c(1:2),-1][1,]
+novos_titulos <- sapply(meus_titulos, limpar_titulo, USE.NAMES = FALSE)
+
+# Rebuild Dataframe
+indicadores_financeiros_ibov_corrigido <- indicadores_financeiros_ibov %>%
+  slice(-(1:3)) %>%
+  select(-1)
+colnames(indicadores_financeiros_ibov_corrigido) <- novos_titulos
+
+# 2. Map Indicators to Months
+all_cols <- names(indicadores_financeiros_ibov_corrigido)
+datas_extraidas_str <- str_extract(all_cols, "\\d{4}-\\d{2}-\\d{2}")
+idx_com_data <- !is.na(datas_extraidas_str)
+
+mapa_indicadores <- tibble(
+  coluna_original = all_cols[idx_com_data],
+  nome_indicador = str_remove(all_cols[idx_com_data], "[_\\s]?\\d{4}-\\d{2}-\\d{2}$"),
+  data_completa = as.Date(datas_extraidas_str[idx_com_data])
+) %>%
+  mutate(mes_ano = format(data_completa, "%Y-%m"))
+
+meses_alvo <- sort(unique(mapa_indicadores$mes_ano))
+datas_esg_disponiveis <- as.Date(names(resultados_consolidados))
+
+# 3. Construct Panel with Backfill Logic
+lista_indicadores_por_mes <- map(meses_alvo, function(mes_atual_str) {
+  
+  data_ref_mes_atual <- as.Date(paste0(mes_atual_str, "-01"))
+  cols_fixas <- names(indicadores_financeiros_ibov_corrigido)[1:6]
+  cols_to_select <- set_names(cols_fixas, cols_fixas)
+  
+  # Select appropriate columns for this month (Current or Backfill)
+  Lista_de_indicadores_financeiros <- unique(mapa_indicadores$nome_indicador)
+  
+  for (indicador in Lista_de_indicadores_financeiros) {
+    match_mes_atual <- mapa_indicadores %>%
+      filter(nome_indicador == indicador, mes_ano == mes_atual_str)
+    
+    if (nrow(match_mes_atual) > 0) {
+      # Use current month data
+      col_selecionada <- match_mes_atual %>% arrange(data_completa) %>% tail(1) %>% pull(coluna_original)
+      cols_to_select[col_selecionada] <- col_selecionada
+    } else {
+      # Backfill: Use most recent previous data
+      match_backfill <- mapa_indicadores %>%
+        filter(nome_indicador == indicador, data_completa < data_ref_mes_atual) %>%
+        filter(data_completa == max(data_completa)) %>%
+        slice(1)
+      
+      if (nrow(match_backfill) > 0) {
+        col_substituta <- match_backfill$coluna_original
+        # Rename fictitiously to align columns for binding later
+        nome_ficticio <- str_replace(col_substituta, as.character(match_backfill$data_completa), as.character(data_ref_mes_atual))
+        cols_to_select[nome_ficticio] <- col_substituta
+      }
+    }
+  }
+  
+  df_temp <- indicadores_financeiros_ibov_corrigido %>% select(all_of(cols_to_select))
+  
+  # --- ESG Binary Logic (Dependent Variable) ---
+  # Find the ESG list strictly before this financial month
+  datas_esg_anteriores <- datas_esg_disponiveis[datas_esg_disponiveis < data_ref_mes_atual]
+  
+  if (length(datas_esg_anteriores) > 0) {
+    data_esg_ref <- max(datas_esg_anteriores)
+    lista_nomes_esg <- resultados_consolidados[[as.character(data_esg_ref)]]$vetor_nomes
+    df_temp <- df_temp %>% mutate(`Empresa ESG` = if_else(Nome %in% lista_nomes_esg, 1, 0))
+  } else {
+    df_temp <- df_temp %>% mutate(`Empresa ESG` = 0)
+  }
+  
+  return(df_temp)
+})
+
+names(lista_indicadores_por_mes) <- meses_alvo
+
+
+```
+6. Processing Phase III: P/L Volatility
+
+Processing the quarterly P/L data to create the standard deviation control variable.
+```{r echo=FALSE}
+# Clean and pivot P/L data
+df_pl_limpo <- df_pl_trimestral %>%
+  mutate(across(-Data, as.character)) %>%
+  pivot_longer(cols = -Data, names_to = "nome_coluna_original", values_to = "PL_temp") %>%
+  mutate(
+    PL = as.numeric(PL_temp),
+    Código = str_extract(nome_coluna_original, "[A-Z0-9]+$"),
+    Data_Texto = str_trim(as.character(Data)),
+    # Convert "2T2023" to "2023 Q2" then to Date
+    data_str_invertida = sub("^(\\d)T(\\d{4})$", "\\2 Q\\1", Data_Texto),
+    Data_Ref = as.Date(as.yearqtr(data_str_invertida), frac = 1)
+  ) %>%
+  filter(!is.na(PL), !is.na(Código), !is.na(Data_Ref)) %>%
+  select(Data_Ref, Código, PL)
+```
+
+7. Consolidation & Feature Engineering
+
+We merge the panels, rename variables to English (for the paper), and handle outliers.
+```{r echo=FALSE}
+# 1. Consolidate Monthly Panels
+lista_padronizada <- map(lista_indicadores_por_mes, function(df) {
+  names(df) <- str_remove(names(df), "\\s\\d{4}-\\d{2}-\\d{2}$") # Unify column names
+  return(df)
+})
+
+df_painel <- list_rbind(lista_padronizada, names_to = "Data_Referencia") %>%
+  mutate(
+    Empresa_ESG = as.numeric(`Empresa ESG`),
+    Data = as.Date(paste0(Data_Referencia, "-01")),
+    Nome = as.factor(Nome)
+  )
+
+# 2. Select & Rename Variables (Theoretical Concepts)
+df_regressao <- df_painel %>%
+  select(
+    Nome, Código, Empresa_ESG, Data,
+    Dividend_Yield = `Div Yld (fim)`,
+    Debt_Assets    = `DivBr/Ativo`,
+    ROA            = `RentAt`,
+    ROE            = `RenPat(fim)`,
+    Gross_Margin   = `MrgBru`,
+    EBITDA_Margin  = `Mrg Ebitda`,
+    Net_Margin     = `Margem Liquida`,
+    Total_Assets   = `Ativo Tot`
+  ) %>%
+  # Basic Cleaning
+  mutate(across(c(Dividend_Yield:Total_Assets), ~ na_if(., "-"))) %>%
+  mutate(across(c(Dividend_Yield:Total_Assets), as.numeric)) %>%
+  na.omit() %>%
+  filter(if_all(where(is.numeric), is.finite))
+
+# 3. Add Volatility Feature (P/L SD)
+df_regressao <- df_regressao %>%
+  rowwise() %>%
+  mutate(std_dev_3y_PL = calcular_std_3anos(Código, Data, df_pl_limpo)) %>%
+  ungroup() %>%
+  mutate(std_dev_3y_PL = round(std_dev_3y_PL, 2))
+
+# 4. Integrate Refinitiv ESG Scores (Lagged)
+# Logic: Managers see the score from Year X in Year X+1
+dados_limpos_esg_score <- dados_esg %>%
+  filter(grepl("\\.SA$", ticker)) %>%
+  mutate(ticker = str_remove(ticker, "\\.SA$")) %>%
+  select(ticker, ESGScore, year) %>%
+  drop_na() %>%
+  mutate(Ano_Join = year + 1) # Lag 1 year
+
+df_regressao_atualizado <- df_regressao %>%
+  mutate(Ano_Referencia = year(Data)) %>%
+  left_join(dados_limpos_esg_score, by = c("Código" = "ticker", "Ano_Referencia" = "Ano_Join")) %>%
+  mutate(Dummy_Tem_ESG = ifelse(!is.na(ESGScore), 1, 0))
+
+# 5. Final Dataset Prep
+df_final <- df_regressao_atualizado
+df_final$Empresa_ESG <- as.integer(df_final$Empresa_ESG)
+#df_final <- na.omit(df_final) # Optional: Be careful not to drop rows just because ESGScore is NA if using Dummy
+
+# Create dataset for Pooled Regressions (removing NAs for clean runs)
+
+df_final <- df_final %>%
+  select(-year, -ESGScore)
+
+df_regressao_limpo_sem_na <- na.omit(df_final)
+```
+8. Outlier Removal (Strict)
+
+Creating the specific dataset df_sem_outliers for robust models.
+```{r include=FALSE}
+# 1. Define the numeric columns (Same as before)
+colunas_numericas <- c("Dividend_Yield", "Debt_Assets", "ROA", "ROE", 
+                       "Gross_Margin", "EBITDA_Margin", "Net_Margin", 
+                       "Total_Assets", "std_dev_3y_PL")
+
+# 2. Define a helper function for Winsorization
+# This caps values at the bottom 1% and top 99%
+winsorize_vector <- function(x, probs = c(0.01, 0.99)) {
+  if (all(is.na(x))) return(x) # Handle empty columns
+  
+  # Calculate the quantiles
+  bounds <- quantile(x, probs = probs, na.rm = TRUE)
+  
+  # Replace values below lower bound with lower bound
+  # Replace values above upper bound with upper bound
+  pmax(bounds[1], pmin(x, bounds[2]))
+}
+
+# 3. Apply Winsorization using mutate and across
+df_sem_outliers <- df_final %>%
+  mutate(across(all_of(colunas_numericas), ~ winsorize_vector(.)))
+
+# 4. Verification
+cat("Original rows:", nrow(df_final), "\n")
+cat("Rows after Winsorization:", nrow(df_sem_outliers), "(Should be identical)\n")
+```
+9. Analysis: Regression Models
+
+This section contains the final 4 models specified in the original script.
+```{r echo=FALSE}
+# --- Model 1: Pooled Logit (Base) ---
+# Uses the dataset with outliers removed but NAs handled
+# Note: Using df_regressao_limpo_sem_na for the first pooled check as per original flow
+modelo_pooled_full <- glm(Empresa_ESG ~ Dividend_Yield + Debt_Assets + ROA + ROE + 
+                            Gross_Margin + EBITDA_Margin + Net_Margin + Total_Assets + Dummy_Tem_ESG, 
+                          data = df_regressao_limpo_sem_na, 
+                          family = binomial(link = "logit"))
+summary(modelo_pooled_full)
+
+# --- Model 2: Pooled Logit with ESG Dummy (Outliers Removed) ---
+# Adds the Dummy_Tem_ESG variable
+modelo_pooled_esg_sem_outliers <- glm(Empresa_ESG ~ Dividend_Yield + Debt_Assets + ROA + ROE + 
+                                        Gross_Margin + EBITDA_Margin + Net_Margin + Total_Assets + 
+                                        Dummy_Tem_ESG, 
+                                      data = df_sem_outliers, 
+                                      family = binomial(link = "logit"))
+summary(modelo_pooled_esg_sem_outliers)
+
+
+# --- Model 3: Fixed Effects Logit (feglm) ---
+# The most robust specification: Fixed Effects for Firm and Time (Date)
+# Uses log(Total_Assets) for scaling
+modelo_painel_full <- feglm(Empresa_ESG ~ Dividend_Yield + Debt_Assets + ROA + ROE + 
+                         Gross_Margin + EBITDA_Margin + Net_Margin + log(Total_Assets) + 
+                         Dummy_Tem_ESG | Nome + Data,
+                       data = df_regressao_limpo_sem_na, # Using df_final or df_sem_outliers based on preference
+                       family = binomial("logit"))
+
+summary(modelo_painel_full)
+
+
+# --- Model 4: Fixed Effects Logit (feglm) ---
+# The most robust specification: Fixed Effects for Firm and Time (Date)
+# Uses log(Total_Assets) for scaling
+modelo_painel_sem_outliers <- feglm(Empresa_ESG ~ Dividend_Yield + Debt_Assets + ROA + ROE + 
+                         Gross_Margin + EBITDA_Margin + Net_Margin + log(Total_Assets) + 
+                         Dummy_Tem_ESG | Nome + Data,
+                       data = df_sem_outliers, # Using df_final or df_sem_outliers based on preference
+                       family = binomial("logit"))
+
+summary(modelo_painel_sem_outliers)
+
+
+
+```
+
+
+```{r results='asis'}
+modelsummary(
+  title = "Pooled Logit Model: Entry Criterion (Y ≥ 20%) ",
+  modelo_pooled_full, 
+  output = "latex",
+  # The formula 'term ~ statistic' forces stats into columns
+  shape = term ~ statistic, 
+  statistic = c("Std. Error" = "{std.error}", 
+                           "z value" = "{statistic}", 
+                           "Pr(>|z|)" = "{p.value}"),
+  stars = TRUE
+)
+
+modelsummary(
+  title = "Pooled Logit Model: Entry Criterion (Y ≥ 20%) - Without Outliers",
+  modelo_pooled_esg_sem_outliers, 
+  output = "latex",
+  # The formula 'term ~ statistic' forces stats into columns
+  shape = term ~ statistic, 
+  statistic = c("Std. Error" = "{std.error}", 
+                           "z value" = "{statistic}", 
+                           "Pr(>|z|)" = "{p.value}"),
+  stars = TRUE
+)
+
+modelsummary(
+  title = "Fixed Effects Logit Estimation: Entry Criterion (Y ≥ 20%)",
+  modelo_painel_full, 
+  output = "latex",
+  # The formula 'term ~ statistic' forces stats into columns
+  shape = term ~ statistic, 
+  statistic = c("Std. Error" = "{std.error}", 
+                           "z value" = "{statistic}", 
+                           "Pr(>|z|)" = "{p.value}"),
+  stars = TRUE
+)
+
+modelsummary(
+  title = "Fixed Effects Logit Estimation: Entry Criterion (Y ≥ 20%) - Without Outliers",
+  modelo_painel_sem_outliers, 
+  output = "latex",
+  # The formula 'term ~ statistic' forces stats into columns
+  shape = term ~ statistic, 
+  statistic = c("Std. Error" = "{std.error}", 
+                           "z value" = "{statistic}", 
+                           "Pr(>|z|)" = "{p.value}"),
+  stars = TRUE
+)
+```
