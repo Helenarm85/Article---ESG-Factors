@@ -1,5 +1,5 @@
 ---
-title: "ESG Factors codes"
+title: "Replications - Refactored"
 author: "Helena"
 date: "2025-12-08"
 output: pdf_document
@@ -36,7 +36,6 @@ library(zoo)       # For time series/rolling calculations
 library(pglm)      # Panel GLM
 library(plm)       # Panel Linear Models
 library(fixest)    # Fast Fixed Effects (feglm)
-# library(bife)      # Binary Fixed Effects
 library(stargazer) # Output tables
 library(modelsummary) # Output tables in latex code
 
@@ -70,6 +69,7 @@ limpar_titulo <- function(titulo) {
   )
   
   t <- trimws(gsub("\r\n", " ", titulo))
+  
   
   # Patterns for regex
   regex_old <- "^(.*)\\s*<\\s*([A-Za-zç]{3})\\s+(\\d{4}).*$" # Old format
@@ -125,7 +125,7 @@ obter_empresas_esg_por_data <- function(col_alvo, data_ref, lista_sheets) {
     count(Descrição, name = "Qtd_Fundos_Investindo", sort = TRUE)
   
   # Cutoff rule (5% of active funds in that month)
-  corte_minimo <- qtd_fundos_ativos_data * 0.2  # 10%, 1% ou 20%
+  corte_minimo <- qtd_fundos_ativos_data * 0.20  #1% ou 20% (Change the values here for 0.00001 for Y>=1 and 0.2 for Y>= 20%)
   
   empresas_esg <- ranking %>%
     filter(Qtd_Fundos_Investindo >= corte_minimo)
@@ -496,7 +496,50 @@ summary(modelo_painel_sem_outliers)
 
 
 ```
+```{r echo=FALSE}
+# --- Model 1: Pooled Logit (Base) ---
+# Uses the dataset with outliers removed but NAs handled
+# Note: Using df_regressao_limpo_sem_na for the first pooled check as per original flow
+modelo_pooled_full_probit <- glm(Empresa_ESG ~ Dividend_Yield + Debt_Assets + ROA + ROE + 
+                            Gross_Margin + EBITDA_Margin + Net_Margin + Total_Assets + Dummy_Tem_ESG, 
+                          data = df_regressao_limpo_sem_na, 
+                          family = binomial(link = "probit"))
+summary(modelo_pooled_full_probit)
 
+# --- Model 2: Pooled Logit with ESG Dummy (Outliers Removed) ---
+# Adds the Dummy_Tem_ESG variable
+modelo_pooled_esg_sem_outliers_probit <- glm(Empresa_ESG ~ Dividend_Yield + Debt_Assets + ROA + ROE + 
+                                        Gross_Margin + EBITDA_Margin + Net_Margin + Total_Assets + 
+                                        Dummy_Tem_ESG, 
+                                      data = df_sem_outliers, 
+                                      family = binomial(link = "probit"))
+summary(modelo_pooled_esg_sem_outliers_probit)
+
+
+# --- Model 3: Fixed Effects Logit (feglm) ---
+# The most robust specification: Fixed Effects for Firm and Time (Date)
+# Uses log(Total_Assets) for scaling
+modelo_painel_full_probit <- feglm(Empresa_ESG ~ Dividend_Yield + Debt_Assets + ROA + ROE + 
+                         Gross_Margin + EBITDA_Margin + Net_Margin + log(Total_Assets) + 
+                         Dummy_Tem_ESG | Nome + Data,
+                       data = df_regressao_limpo_sem_na, # Using df_final or df_sem_outliers based on preference
+                       family = binomial("probit"))
+
+summary(modelo_painel_full_probit)
+
+
+# --- Model 4: Fixed Effects Logit (feglm) ---
+# The most robust specification: Fixed Effects for Firm and Time (Date)
+# Uses log(Total_Assets) for scaling
+modelo_painel_sem_outliers_probit <- feglm(Empresa_ESG ~ Dividend_Yield + Debt_Assets + ROA + ROE + 
+                         Gross_Margin + EBITDA_Margin + Net_Margin + log(Total_Assets) + 
+                         Dummy_Tem_ESG | Nome + Data,
+                       data = df_sem_outliers, # Using df_final or df_sem_outliers based on preference
+                       family = binomial("probit"))
+
+summary(modelo_painel_sem_outliers_probit)
+
+```
 
 ```{r results='asis'}
 modelsummary(
@@ -512,7 +555,7 @@ modelsummary(
 )
 
 modelsummary(
-  title = "Pooled Logit Model: Entry Criterion (Y ≥ 20%) - Without Outliers",
+  title = "Pooled Logit Model: Entry Criterion (Y ≥ 20%) - Winsorized",
   modelo_pooled_esg_sem_outliers, 
   output = "latex",
   # The formula 'term ~ statistic' forces stats into columns
@@ -536,8 +579,58 @@ modelsummary(
 )
 
 modelsummary(
-  title = "Fixed Effects Logit Estimation: Entry Criterion (Y ≥ 20%) - Without Outliers",
+  title = "Fixed Effects Logit Estimation: Entry Criterion (Y ≥ 20%) - Winsorized",
   modelo_painel_sem_outliers, 
+  output = "latex",
+  # The formula 'term ~ statistic' forces stats into columns
+  shape = term ~ statistic, 
+  statistic = c("Std. Error" = "{std.error}", 
+                           "z value" = "{statistic}", 
+                           "Pr(>|z|)" = "{p.value}"),
+  stars = TRUE
+)
+```
+
+```{r results='asis'}
+modelsummary(
+  title = "Pooled Logit Model: Entry Criterion (Y ≥ 20%) ",
+  modelo_pooled_full_probit, 
+  output = "latex",
+  # The formula 'term ~ statistic' forces stats into columns
+  shape = term ~ statistic, 
+  statistic = c("Std. Error" = "{std.error}", 
+                           "z value" = "{statistic}", 
+                           "Pr(>|z|)" = "{p.value}"),
+  stars = TRUE
+)
+
+modelsummary(
+  title = "Pooled Logit Model: Entry Criterion (Y ≥ 20%) - Winsorized",
+  modelo_pooled_esg_sem_outliers_probit, 
+  output = "latex",
+  # The formula 'term ~ statistic' forces stats into columns
+  shape = term ~ statistic, 
+  statistic = c("Std. Error" = "{std.error}", 
+                           "z value" = "{statistic}", 
+                           "Pr(>|z|)" = "{p.value}"),
+  stars = TRUE
+)
+
+modelsummary(
+  title = "Fixed Effects Logit Estimation: Entry Criterion (Y ≥ 20%)",
+  modelo_painel_full_probit, 
+  output = "latex",
+  # The formula 'term ~ statistic' forces stats into columns
+  shape = term ~ statistic, 
+  statistic = c("Std. Error" = "{std.error}", 
+                           "z value" = "{statistic}", 
+                           "Pr(>|z|)" = "{p.value}"),
+  stars = TRUE
+)
+
+modelsummary(
+  title = "Fixed Effects Logit Estimation: Entry Criterion (Y ≥ 20%) - Winsorized",
+  modelo_painel_sem_outliers_probit, 
   output = "latex",
   # The formula 'term ~ statistic' forces stats into columns
   shape = term ~ statistic, 
