@@ -1,5 +1,5 @@
 ---
-title: "Replications - Refactored"
+title: "Script ESG Factors"
 author: "Helena"
 date: "2025-12-08"
 output: pdf_document
@@ -9,6 +9,7 @@ output: pdf_document
 This section loads all necessary libraries and configures global options.
 
 ```{r setup, include=FALSE}
+#To adjust the criteria from 1% to 20%, navigate to line 129 and replace 0.01 with 0.20 (or vice versa). Afterward, please update the table names in the final four code chunks.
 
 # # General Options
 # knitr::opts_chunk$set(
@@ -125,7 +126,7 @@ obter_empresas_esg_por_data <- function(col_alvo, data_ref, lista_sheets) {
     count(Descrição, name = "Qtd_Fundos_Investindo", sort = TRUE)
   
   # Cutoff rule (5% of active funds in that month)
-  corte_minimo <- qtd_fundos_ativos_data * 0.20  #1% ou 20% (Change the values here for 0.00001 for Y>=1 and 0.2 for Y>= 20%)
+  corte_minimo <- qtd_fundos_ativos_data * 0.01  #1% ou 1% (Change the values here for 0.00001 for Y>=1 and 0.2 for Y>= 1%)
   
   empresas_esg <- ranking %>%
     filter(Qtd_Fundos_Investindo >= corte_minimo)
@@ -455,15 +456,15 @@ This section contains the final 4 models specified in the original script.
 # Uses the dataset with outliers removed but NAs handled
 # Note: Using df_regressao_limpo_sem_na for the first pooled check as per original flow
 modelo_pooled_full <- glm(Empresa_ESG ~ Dividend_Yield + Debt_Assets + ROA + ROE + 
-                            Gross_Margin + EBITDA_Margin + Net_Margin + Total_Assets + Dummy_Tem_ESG, 
+                            Gross_Margin + EBITDA_Margin + Net_Margin + log(Total_Assets) + Dummy_Tem_ESG, 
                           data = df_regressao_limpo_sem_na, 
                           family = binomial(link = "logit"))
 summary(modelo_pooled_full)
 
-# --- Model 2: Pooled Logit with ESG Dummy (Outliers Removed) ---
+# --- Model 2: Pooled Logit with ESG Dummy (Winsorized) ---
 # Adds the Dummy_Tem_ESG variable
 modelo_pooled_esg_winsorized <- glm(Empresa_ESG ~ Dividend_Yield + Debt_Assets + ROA + ROE + 
-                                        Gross_Margin + EBITDA_Margin + Net_Margin + Total_Assets + 
+                                        Gross_Margin + EBITDA_Margin + Net_Margin + log(Total_Assets) + 
                                         Dummy_Tem_ESG, 
                                       data = df_winsorized, 
                                       family = binomial(link = "logit"))
@@ -501,7 +502,7 @@ summary(modelo_painel_winsorized)
 # Uses the dataset with outliers removed but NAs handled
 # Note: Using df_regressao_limpo_sem_na for the first pooled check as per original flow
 modelo_pooled_full_probit <- glm(Empresa_ESG ~ Dividend_Yield + Debt_Assets + ROA + ROE + 
-                            Gross_Margin + EBITDA_Margin + Net_Margin + Total_Assets + Dummy_Tem_ESG, 
+                            Gross_Margin + EBITDA_Margin + Net_Margin + log(Total_Assets) + Dummy_Tem_ESG, 
                           data = df_regressao_limpo_sem_na, 
                           family = binomial(link = "probit"))
 summary(modelo_pooled_full_probit)
@@ -509,7 +510,7 @@ summary(modelo_pooled_full_probit)
 # --- Model 2: Pooled Probit with ESG Dummy (Winsorized) ---
 # Adds the Dummy_Tem_ESG variable
 modelo_pooled_esg_winsorized_probit <- glm(Empresa_ESG ~ Dividend_Yield + Debt_Assets + ROA + ROE + 
-                                        Gross_Margin + EBITDA_Margin + Net_Margin + Total_Assets + 
+                                        Gross_Margin + EBITDA_Margin + Net_Margin + log(Total_Assets) + 
                                         Dummy_Tem_ESG, 
                                       data = df_winsorized, 
                                       family = binomial(link = "probit"))
@@ -543,7 +544,7 @@ summary(modelo_painel_winsorized_probit)
 
 ```{r results='asis'}
 modelsummary(
-  title = "Pooled Logit Model: Entry Criterion (Y ≥ 20%) ",
+  title = "Pooled Logit Model: Entry Criterion (Y ≥ 1%) ",
   modelo_pooled_full, 
   output = "latex",
   # The formula 'term ~ statistic' forces stats into columns
@@ -555,7 +556,7 @@ modelsummary(
 )
 
 modelsummary(
-  title = "Pooled Logit Model: Entry Criterion (Y ≥ 20%) - Winsorized",
+  title = "Pooled Logit Model: Entry Criterion (Y ≥ 1%) - Winsorized",
   modelo_pooled_esg_winsorized, 
   output = "latex",
   # The formula 'term ~ statistic' forces stats into columns
@@ -567,7 +568,7 @@ modelsummary(
 )
 
 modelsummary(
-  title = "Fixed Effects Logit Estimation: Entry Criterion (Y ≥ 20%)",
+  title = "Fixed Effects Logit Estimation: Entry Criterion (Y ≥ 1%)",
   modelo_painel_full, 
   output = "latex",
   # The formula 'term ~ statistic' forces stats into columns
@@ -579,7 +580,7 @@ modelsummary(
 )
 
 modelsummary(
-  title = "Fixed Effects Logit Estimation: Entry Criterion (Y ≥ 20%) - Winsorized",
+  title = "Fixed Effects Logit Estimation: Entry Criterion (Y ≥ 1%) - Winsorized",
   modelo_painel_winsorized, 
   output = "latex",
   # The formula 'term ~ statistic' forces stats into columns
@@ -593,7 +594,7 @@ modelsummary(
 
 ```{r results='asis'}
 modelsummary(
-  title = "Pooled Probit Model: Entry Criterion (Y ≥ 20%) ",
+  title = "Pooled Probit Model: Entry Criterion (Y ≥ 1%) ",
   modelo_pooled_full_probit, 
   output = "latex",
   # The formula 'term ~ statistic' forces stats into columns
@@ -605,7 +606,7 @@ modelsummary(
 )
 
 modelsummary(
-  title = "Pooled Probit Model: Entry Criterion (Y ≥ 20%) - Winsorized",
+  title = "Pooled Probit Model: Entry Criterion (Y ≥ 1%) - Winsorized",
   modelo_pooled_esg_winsorized_probit, 
   output = "latex",
   # The formula 'term ~ statistic' forces stats into columns
@@ -617,7 +618,7 @@ modelsummary(
 )
 
 modelsummary(
-  title = "Fixed Effects Probit Estimation: Entry Criterion (Y ≥ 20%)",
+  title = "Fixed Effects Probit Estimation: Entry Criterion (Y ≥ 1%)",
   modelo_painel_full_probit, 
   output = "latex",
   # The formula 'term ~ statistic' forces stats into columns
@@ -629,7 +630,7 @@ modelsummary(
 )
 
 modelsummary(
-  title = "Fixed Effects Probit Estimation: Entry Criterion (Y ≥ 20%) - Winsorized",
+  title = "Fixed Effects Probit Estimation: Entry Criterion (Y ≥ 1%) - Winsorized",
   modelo_painel_winsorized_probit, 
   output = "latex",
   # The formula 'term ~ statistic' forces stats into columns
