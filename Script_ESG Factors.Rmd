@@ -126,7 +126,7 @@ obter_empresas_esg_por_data <- function(col_alvo, data_ref, lista_sheets) {
     count(Descrição, name = "Qtd_Fundos_Investindo", sort = TRUE)
   
   # Cutoff rule (5% of active funds in that month)
-  corte_minimo <- qtd_fundos_ativos_data * 0.01  #1% ou 1% (Change the values here for 0.00001 for Y>=1 and 0.2 for Y>= 1%)
+  corte_minimo <- qtd_fundos_ativos_data * 0.2  #1% ou 20% (Change the values here for 0.00001 for Y>=1 and 0.2 for Y>= 1%)
   
   empresas_esg <- ranking %>%
     filter(Qtd_Fundos_Investindo >= corte_minimo)
@@ -538,106 +538,163 @@ modelo_painel_winsorized_probit <- feglm(Empresa_ESG ~ Dividend_Yield + Debt_Ass
                        data = df_winsorized, # Using df_final or df_winsorized based on preference
                        family = binomial("probit"))
 
+# Functions:
+#logit
+summary(modelo_pooled_full)
+summary(modelo_pooled_esg_winsorized)
+summary(modelo_painel_full)
+summary(modelo_painel_winsorized)
+
+#probit
+summary(modelo_pooled_full_probit)
+summary(modelo_pooled_esg_winsorized_probit)
+summary(modelo_painel_full_probit)
 summary(modelo_painel_winsorized_probit)
 
+
+```
+
+## Code to produce model summaries using {KableExtra}.
+```{r}
+convert_to_kable_table <- function(model, title = "Model") {
+  model %>%
+    broom::tidy() %>%
+    mutate(
+      sign = case_when(
+        p.value < 0.001 ~ "***",
+        p.value < 0.01 ~ "**",
+        p.value < 0.05 ~ "*",
+        TRUE ~ ""
+      ),
+      term = paste(term, sign)
+    ) %>%
+    select(-sign, -p.value) %>%
+    mutate(across(where(is.numeric), \(x) round(x, 4))) %>%
+    kbl(caption = title) %>%
+    kable_classic(full_width = F, html_font = "Times New Roman")
+}
+
+#Paste this down - console
+
+#logit
+
+convert_to_kable_table(modelo_pooled_full, title = "Pooled Logit Model: Entry Criterion (Y ≥ 20%)")
+convert_to_kable_table(modelo_pooled_esg_winsorized, title = "Pooled Logit Model: Entry Criterion (Y ≥ 20%) - Winsorized")
+convert_to_kable_table(modelo_painel_full, title = "Fixed Effects Logit Estimation: Entry Criterion (Y ≥ 20%)")
+convert_to_kable_table(modelo_painel_winsorized, title = "Fixed Effects Logit Estimation: Entry Criterion (Y ≥ 20%) - Winsorized")
+
+
+#probit
+
+convert_to_kable_table(modelo_pooled_full_probit, title = "Pooled Probit Model: Entry Criterion (Y ≥ 20%)")
+convert_to_kable_table(modelo_pooled_esg_winsorized_probit, title = "Pooled Probit Model: Entry Criterion (Y ≥ 20%) - Winsorized")
+convert_to_kable_table(modelo_painel_full_probit, title = "Fixed Effects Probit Estimation: Entry Criterion (Y ≥ 20%)")
+convert_to_kable_table(modelo_painel_winsorized_probit, title = "Fixed Effects Probit Estimation: Entry Criterion (Y ≥ 20%) - Winsorized")
+
+
+
+```
+
+
+## Code to produce model summaries in LaTex.
+
+```{r results='asis'}
+# modelsummary(
+#   title = "Pooled Logit Model: Entry Criterion (Y ≥ 1%) ",
+#   modelo_pooled_full, 
+#   output = "latex",
+#   # The formula 'term ~ statistic' forces stats into columns
+#   shape = term ~ statistic, 
+#   statistic = c("Std. Error" = "{std.error}", 
+#                            "z value" = "{statistic}", 
+#                            "Pr(>|z|)" = "{p.value}"),
+#   stars = TRUE
+# )
+# 
+# modelsummary(
+#   title = "Pooled Logit Model: Entry Criterion (Y ≥ 1%) - Winsorized",
+#   modelo_pooled_esg_winsorized, 
+#   output = "latex",
+#   # The formula 'term ~ statistic' forces stats into columns
+#   shape = term ~ statistic, 
+#   statistic = c("Std. Error" = "{std.error}", 
+#                            "z value" = "{statistic}", 
+#                            "Pr(>|z|)" = "{p.value}"),
+#   stars = TRUE
+# )
+# 
+# modelsummary(
+#   title = "Fixed Effects Logit Estimation: Entry Criterion (Y ≥ 1%)",
+#   modelo_painel_full, 
+#   output = "latex",
+#   # The formula 'term ~ statistic' forces stats into columns
+#   shape = term ~ statistic, 
+#   statistic = c("Std. Error" = "{std.error}", 
+#                            "z value" = "{statistic}", 
+#                            "Pr(>|z|)" = "{p.value}"),
+#   stars = TRUE
+# )
+# 
+# modelsummary(
+#   title = "Fixed Effects Logit Estimation: Entry Criterion (Y ≥ 1%) - Winsorized",
+#   modelo_painel_winsorized, 
+#   output = "latex",
+#   # The formula 'term ~ statistic' forces stats into columns
+#   shape = term ~ statistic, 
+#   statistic = c("Std. Error" = "{std.error}", 
+#                            "z value" = "{statistic}", 
+#                            "Pr(>|z|)" = "{p.value}"),
+#   stars = TRUE
+# )
 ```
 
 ```{r results='asis'}
-modelsummary(
-  title = "Pooled Logit Model: Entry Criterion (Y ≥ 1%) ",
-  modelo_pooled_full, 
-  output = "latex",
-  # The formula 'term ~ statistic' forces stats into columns
-  shape = term ~ statistic, 
-  statistic = c("Std. Error" = "{std.error}", 
-                           "z value" = "{statistic}", 
-                           "Pr(>|z|)" = "{p.value}"),
-  stars = TRUE
-)
-
-modelsummary(
-  title = "Pooled Logit Model: Entry Criterion (Y ≥ 1%) - Winsorized",
-  modelo_pooled_esg_winsorized, 
-  output = "latex",
-  # The formula 'term ~ statistic' forces stats into columns
-  shape = term ~ statistic, 
-  statistic = c("Std. Error" = "{std.error}", 
-                           "z value" = "{statistic}", 
-                           "Pr(>|z|)" = "{p.value}"),
-  stars = TRUE
-)
-
-modelsummary(
-  title = "Fixed Effects Logit Estimation: Entry Criterion (Y ≥ 1%)",
-  modelo_painel_full, 
-  output = "latex",
-  # The formula 'term ~ statistic' forces stats into columns
-  shape = term ~ statistic, 
-  statistic = c("Std. Error" = "{std.error}", 
-                           "z value" = "{statistic}", 
-                           "Pr(>|z|)" = "{p.value}"),
-  stars = TRUE
-)
-
-modelsummary(
-  title = "Fixed Effects Logit Estimation: Entry Criterion (Y ≥ 1%) - Winsorized",
-  modelo_painel_winsorized, 
-  output = "latex",
-  # The formula 'term ~ statistic' forces stats into columns
-  shape = term ~ statistic, 
-  statistic = c("Std. Error" = "{std.error}", 
-                           "z value" = "{statistic}", 
-                           "Pr(>|z|)" = "{p.value}"),
-  stars = TRUE
-)
+# modelsummary(
+#   title = "Pooled Probit Model: Entry Criterion (Y ≥ 1%) ",
+#   modelo_pooled_full_probit, 
+#   output = "latex",
+#   # The formula 'term ~ statistic' forces stats into columns
+#   shape = term ~ statistic, 
+#   statistic = c("Std. Error" = "{std.error}", 
+#                            "z value" = "{statistic}", 
+#                            "Pr(>|z|)" = "{p.value}"),
+#   stars = TRUE
+# )
+# 
+# modelsummary(
+#   title = "Pooled Probit Model: Entry Criterion (Y ≥ 1%) - Winsorized",
+#   modelo_pooled_esg_winsorized_probit, 
+#   output = "latex",
+#   # The formula 'term ~ statistic' forces stats into columns
+#   shape = term ~ statistic, 
+#   statistic = c("Std. Error" = "{std.error}", 
+#                            "z value" = "{statistic}", 
+#                            "Pr(>|z|)" = "{p.value}"),
+#   stars = TRUE
+# )
+# 
+# modelsummary(
+#   title = "Fixed Effects Probit Estimation: Entry Criterion (Y ≥ 1%)",
+#   modelo_painel_full_probit, 
+#   output = "latex",
+#   # The formula 'term ~ statistic' forces stats into columns
+#   shape = term ~ statistic, 
+#   statistic = c("Std. Error" = "{std.error}", 
+#                            "z value" = "{statistic}", 
+#                            "Pr(>|z|)" = "{p.value}"),
+#   stars = TRUE
+# )
+# 
+# modelsummary(
+#   title = "Fixed Effects Probit Estimation: Entry Criterion (Y ≥ 1%) - Winsorized",
+#   modelo_painel_winsorized_probit, 
+#   output = "latex",
+#   # The formula 'term ~ statistic' forces stats into columns
+#   shape = term ~ statistic, 
+#   statistic = c("Std. Error" = "{std.error}", 
+#                            "z value" = "{statistic}", 
+#                            "Pr(>|z|)" = "{p.value}"),
+#   stars = TRUE
+# )
 ```
 
-```{r results='asis'}
-modelsummary(
-  title = "Pooled Probit Model: Entry Criterion (Y ≥ 1%) ",
-  modelo_pooled_full_probit, 
-  output = "latex",
-  # The formula 'term ~ statistic' forces stats into columns
-  shape = term ~ statistic, 
-  statistic = c("Std. Error" = "{std.error}", 
-                           "z value" = "{statistic}", 
-                           "Pr(>|z|)" = "{p.value}"),
-  stars = TRUE
-)
-
-modelsummary(
-  title = "Pooled Probit Model: Entry Criterion (Y ≥ 1%) - Winsorized",
-  modelo_pooled_esg_winsorized_probit, 
-  output = "latex",
-  # The formula 'term ~ statistic' forces stats into columns
-  shape = term ~ statistic, 
-  statistic = c("Std. Error" = "{std.error}", 
-                           "z value" = "{statistic}", 
-                           "Pr(>|z|)" = "{p.value}"),
-  stars = TRUE
-)
-
-modelsummary(
-  title = "Fixed Effects Probit Estimation: Entry Criterion (Y ≥ 1%)",
-  modelo_painel_full_probit, 
-  output = "latex",
-  # The formula 'term ~ statistic' forces stats into columns
-  shape = term ~ statistic, 
-  statistic = c("Std. Error" = "{std.error}", 
-                           "z value" = "{statistic}", 
-                           "Pr(>|z|)" = "{p.value}"),
-  stars = TRUE
-)
-
-modelsummary(
-  title = "Fixed Effects Probit Estimation: Entry Criterion (Y ≥ 1%) - Winsorized",
-  modelo_painel_winsorized_probit, 
-  output = "latex",
-  # The formula 'term ~ statistic' forces stats into columns
-  shape = term ~ statistic, 
-  statistic = c("Std. Error" = "{std.error}", 
-                           "z value" = "{statistic}", 
-                           "Pr(>|z|)" = "{p.value}"),
-  stars = TRUE
-)
-```
