@@ -22,12 +22,14 @@ This section loads all necessary libraries and configures global options.
 # Data Manipulation & IO
 library(dplyr)
 library(readxl)
+library(tidyr)
 library(haven)     # For .dta files
 library(stringr)   # For string manipulation
 library(lubridate) # For date handling
 library(tidyr)     # For pivoting data
 library(purrr)     # For functional programming (map, reduce)
 library(listviewer)# Optional: for viewing lists
+library(zoo)
 
 # Parallel Processing
 library(furrr)
@@ -36,10 +38,10 @@ library(furrr)
 library(zoo)       # For time series/rolling calculations
 library(pglm)      # Panel GLM
 library(plm)       # Panel Linear Models
-library(fixest)    # Fast Fixed Effects (feglm)
+# library(fixest)    # Fast Fixed Effects (feglm)
 library(stargazer) # Output tables
 library(modelsummary) # Output tables in latex code
-library(collapse)
+# library(collapse)
 
 # Visualization
 library(ggplot2)
@@ -173,7 +175,7 @@ filename_funds <- "Carteira atualizada 04.12.25 fundos ESG selecionados.xlsx"
 sheet_names <- excel_sheets(filename_funds)
 
 # Read all sheets in parallel
-all_sheets <- future_map(sheet_names, function(x) {
+all_sheets <- purrr::map(sheet_names, function(x) {
   read_excel(filename_funds, sheet = x)
 })
 
@@ -396,12 +398,29 @@ df_regressao <- df_regressao %>%
 # 4. Integrate Refinitiv ESG Scores
 df_regressao_atualizado <- read_excel("ESGscore.Refinitiv.xlsx") 
 df_regressao_atualizado$ESGScore[df_regressao_atualizado$ESGScore == "NULL"] <- NA
-  df_regressao_atualizado <- df_regressao_atualizado %>% mutate(Dummy_Tem_ESG = ifelse(!is.na(ESGScore), 1, 0))
+df_regressao_atualizado <- df_regressao_atualizado %>% mutate(Dummy_Tem_ESG = ifelse(!is.na(ESGScore), 1, 0))
+
+df_regressao_atualizado <-
+  df_regressao_atualizado |> 
+  separate(Código, c("Código", "other"), "\\.") |> 
+  distinct(Código, Ano_Referencia, Dummy_Tem_ESG)
+
+## check
+anyNA(df_regressao_atualizado)
+
+df_final <-
+  df_regressao |> 
+  mutate(Ano_Referencia = lubridate::year(Data)) |> 
+  left_join(df_regressao_atualizado) |> 
+  replace_na(list(Dummy_Tem_ESG = 0)) |> 
+  select(-"Ano_Referencia")
+
+View(df_final)
 
 # 5. Final Dataset Prep
-df_final <- df_regressao_atualizado
+# df_final <- df_regressao_atualizado
 
-#df_final <- na.omit(df_final) # Optional: Be careful not to drop rows just because ESGScore is NA if using Dummy
+# df_final <- na.omit(df_final) # Optional: Be careful not to drop rows just because ESGScore is NA if using Dummy
 
 # Create dataset for Pooled Regressions (removing NAs for clean runs)
 
@@ -473,7 +492,7 @@ summary(modelo_pooled_esg_winsorized)
 modelo_painel_full <- feglm(Empresa_ESG ~ Dividend_Yield + Debt_Assets + ROA + ROE + 
                          Gross_Margin + EBITDA_Margin + Net_Margin + log(Total_Assets) + 
                          Dummy_Tem_ESG | Nome + Data,
-                       data = df_regressao_limpo_sem_na, # Using df_final or df_winsorized based on preference
+                       data = df_final, # Using df_final or df_winsorized based on preference
                        family = binomial("logit"))
 
 summary(modelo_painel_full)
