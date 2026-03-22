@@ -38,10 +38,10 @@ library(furrr)
 library(zoo)       # For time series/rolling calculations
 library(pglm)      # Panel GLM
 library(plm)       # Panel Linear Models
-# library(fixest)    # Fast Fixed Effects (feglm)
+library(fixest)    # Fast Fixed Effects (feglm)
 library(stargazer) # Output tables
 library(modelsummary) # Output tables in latex code
-# library(collapse)
+library(collapse)
 
 # Visualization
 library(ggplot2)
@@ -472,7 +472,7 @@ This section contains the final 4 models specified in the original script.
 # Note: Using df_regressao_limpo_sem_na for the first pooled check as per original flow
 modelo_pooled_full <- glm(Empresa_ESG ~ Dividend_Yield + Debt_Assets + ROA + ROE + 
                             Gross_Margin + EBITDA_Margin + Net_Margin + log(Total_Assets) + Dummy_Tem_ESG, 
-                          data = df_regressao_limpo_sem_na, 
+                          data = df_final, 
                           family = binomial(link = "logit"))
 summary(modelo_pooled_full)
 
@@ -518,7 +518,7 @@ summary(modelo_painel_winsorized)
 # Note: Using df_regressao_limpo_sem_na for the first pooled check as per original flow
 modelo_pooled_full_probit <- glm(Empresa_ESG ~ Dividend_Yield + Debt_Assets + ROA + ROE + 
                             Gross_Margin + EBITDA_Margin + Net_Margin + log(Total_Assets) + Dummy_Tem_ESG, 
-                          data = df_regressao_limpo_sem_na, 
+                          data = df_final, 
                           family = binomial(link = "probit"))
 summary(modelo_pooled_full_probit)
 
