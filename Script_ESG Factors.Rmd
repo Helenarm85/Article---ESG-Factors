@@ -39,7 +39,7 @@ library(plm)       # Panel Linear Models
 library(fixest)    # Fast Fixed Effects (feglm)
 library(stargazer) # Output tables
 library(modelsummary) # Output tables in latex code
-
+library(collapse)
 
 # Visualization
 library(ggplot2)
@@ -97,7 +97,7 @@ limpar_titulo <- function(titulo) {
 }
 
 # --- Function 2: Determine ESG Companies by Date ---
-# Logic: Checks fund holdings for a specific date and applies 5% cutoff rule
+# Logic: Checks fund holdings for a specific date and applies x% cutoff rule
 obter_empresas_esg_por_data <- function(col_alvo, data_ref, lista_sheets) {
   
   # Filter funds that have data for this column
@@ -125,8 +125,8 @@ obter_empresas_esg_por_data <- function(col_alvo, data_ref, lista_sheets) {
     distinct(Nome_Fundo, Descrição) %>%
     count(Descrição, name = "Qtd_Fundos_Investindo", sort = TRUE)
   
-  # Cutoff rule (5% of active funds in that month)
-  corte_minimo <- qtd_fundos_ativos_data * 0.2  #1% ou 20% (Change the values here for 0.00001 for Y>=1 and 0.2 for Y>= 1%)
+  # Cutoff rule (1% ou 20% of active funds in that month)
+  corte_minimo <- qtd_fundos_ativos_data * 0.20  #1% ou 20% (Change the values here for 0.00001 for Y>=0.01 and 0.2 for Y>= 1)
   
   empresas_esg <- ranking %>%
     filter(Qtd_Fundos_Investindo >= corte_minimo)
@@ -157,7 +157,7 @@ calcular_std_3anos <- function(ticker_alvo, data_corte, df_source) {
 Importing all raw data sources at the start for better file management.
 ```{r include=FALSE}
 # 1. Refinitiv ESG Data
-dados_esg <- read_dta("Refinitiv.esg.dta")
+dados_esg <- read_excel("ESGscore.Refinitiv.xlsx")
 
 # 2. Financial Indicators (Market Data)
 file_indicators <- "Indicadores financeiros acoes ibov. atualizado 04.12.25.xlsx"
@@ -180,6 +180,7 @@ all_sheets <- future_map(sheet_names, function(x) {
 # Rename list elements based on Fund ID (from cell B1)
 fund_ids <- map_chr(all_sheets, ~ names(.x)[2])
 names(all_sheets) <- fund_ids
+
 
 print("All data loaded successfully.")
 ```
@@ -392,33 +393,27 @@ df_regressao <- df_regressao %>%
   ungroup() %>%
   mutate(std_dev_3y_PL = round(std_dev_3y_PL, 2))
 
-# 4. Integrate Refinitiv ESG Scores (Lagged)
-# Logic: Managers see the score from Year X in Year X+1
-dados_limpos_esg_score <- dados_esg %>%
-  filter(grepl("\\.SA$", ticker)) %>%
-  mutate(ticker = str_remove(ticker, "\\.SA$")) %>%
-  select(ticker, ESGScore, year) %>%
-  drop_na() %>%
-  mutate(Ano_Join = year + 1) # Lag 1 year
-
-df_regressao_atualizado <- df_regressao %>%
-  mutate(Ano_Referencia = year(Data)) %>%
-  left_join(dados_limpos_esg_score, by = c("Código" = "ticker", "Ano_Referencia" = "Ano_Join")) %>%
-  mutate(Dummy_Tem_ESG = ifelse(!is.na(ESGScore), 1, 0))
+# 4. Integrate Refinitiv ESG Scores
+df_regressao_atualizado <- read_excel("ESGscore.Refinitiv.xlsx") 
+df_regressao_atualizado$ESGScore[df_regressao_atualizado$ESGScore == "NULL"] <- NA
+  df_regressao_atualizado <- df_regressao_atualizado %>% mutate(Dummy_Tem_ESG = ifelse(!is.na(ESGScore), 1, 0))
 
 # 5. Final Dataset Prep
 df_final <- df_regressao_atualizado
-df_final$Empresa_ESG <- as.integer(df_final$Empresa_ESG)
+
 #df_final <- na.omit(df_final) # Optional: Be careful not to drop rows just because ESGScore is NA if using Dummy
 
 # Create dataset for Pooled Regressions (removing NAs for clean runs)
 
-df_final <- df_final %>%
-  select(-year, -ESGScore)
+#df_final <- df_final %>%
+ # select(-year, -ESGScore)
 
-df_regressao_limpo_sem_na <- na.omit(df_final)
+#df_regressao_limpo_sem_na <- na.omit(df_final)
 ```
-8. Outlier Removal (Strict)
+8. Winsorized (Strict)
+```{r}
+table(df_final$Dummy_Tem_ESG)
+```
 
 Creating the specific dataset df_winsorized for robust models.
 ```{r include=FALSE}
@@ -429,6 +424,7 @@ colunas_numericas <- c("Dividend_Yield", "Debt_Assets", "ROA", "ROE",
 
 # 2. Define a helper function for Winsorization
 # This caps values at the bottom 1% and top 99%
+#test a new vakue 0.025 , 0.975
 winsorize_vector <- function(x, probs = c(0.01, 0.99)) {
   if (all(is.na(x))) return(x) # Handle empty columns
   
@@ -540,22 +536,23 @@ modelo_painel_winsorized_probit <- feglm(Empresa_ESG ~ Dividend_Yield + Debt_Ass
 
 # Functions:
 #logit
-summary(modelo_pooled_full)
-summary(modelo_pooled_esg_winsorized)
-summary(modelo_painel_full)
-summary(modelo_painel_winsorized)
+#summary(modelo_pooled_full)
+#summary(modelo_pooled_esg_winsorized)
+#summary(modelo_painel_full)
+#summary(modelo_painel_winsorized)
 
 #probit
-summary(modelo_pooled_full_probit)
-summary(modelo_pooled_esg_winsorized_probit)
-summary(modelo_painel_full_probit)
-summary(modelo_painel_winsorized_probit)
+#summary(modelo_pooled_full_probit)
+#summary(modelo_pooled_esg_winsorized_probit)
+#summary(modelo_painel_full_probit)
+#summary(modelo_painel_winsorized_probit)
 
 
 ```
 
 ## Code to produce model summaries using {KableExtra}.
 ```{r}
+library(kableExtra)
 convert_to_kable_table <- function(model, title = "Model") {
   model %>%
     broom::tidy() %>%
@@ -696,5 +693,75 @@ convert_to_kable_table(modelo_painel_winsorized_probit, title = "Fixed Effects P
 #                            "Pr(>|z|)" = "{p.value}"),
 #   stars = TRUE
 # )
+```
+
+## Descriptive Stats
+
+```{r}
+# Instalar pacotes necessários (apenas na primeira vez)
+# install.packages(c("psych", "corrplot", "car", "Hmisc"))
+
+# Carregar as bibliotecas
+library(psych)    # Para estatísticas descritivas detalhadas
+library(corrplot) # Para visualizar a matriz de correlação
+library(car)      # Para calcular o VIF
+```
+
+### Summary Stats
+```{r}
+
+## applying desc stats on final data, change if needed.
+
+data_for_desc_stat <-
+  df_final %>% 
+  select(where(is.numeric)) %>% 
+  select(-"Dummy_Tem_ESG", -"Ano_Referencia", -"std_dev_3y_PL")
+
+## Basic summary - Statistic discriptive and Correlation matrix
+# 1. LOG TOTAL ASSETS (FAÇA PRIMEIRO)
+data_for_desc_stat$log_Total_Assets <- log(data_for_desc_stat$Total_Assets + 1)
+data_for_desc_stat$Total_Assets <- NULL
+
+# 2. ESTATÍSTICA DESCRITIVA
+library(psych)
+tabela_descritiva <- describe(data_for_desc_stat)
+
+# 3. SALVAR
+write.csv(tabela_descritiva, "tabela_descritivas.csv", row.names = FALSE)
+print(round(tabela_descritiva, 2))
+
+# 4. CORRELAÇÃO (SEM MUDANÇA)
+matriz_cor <- cor(data_for_desc_stat, method = "pearson")
+write.csv(round(matriz_cor, 2), "matriz_correlacao.csv", row.names = TRUE)
+
+# Exibir a matriz numérica arredondada para 2 casas decimais
+print(round(matriz_cor, 2))
+
+# --- Visualização Gráfica (Recomendado) ---
+# O corrplot ajuda a identificar padrões rapidamente
+corrplot(matriz_cor, 
+         method = "color",    # Usa cores para indicar força
+         type = "upper",      # Mostra apenas a parte superior
+         addCoef.col = "black", # Adiciona o valor numérico
+         tl.col = "black",    # Cor do texto das etiquetas
+         diag = FALSE)        # Remove a diagonal principal
+
+```
+
+### VIF
+```{r}
+# 1. Criar um modelo de regressão linear múltipla
+# Exemplo: Prever 'mpg' (consumo) usando todas as outras variáveis (.)
+modelo <- lm(Empresa_ESG ~ ., data = data_for_desc_stat)
+
+# 2. Calcular o VIF
+vif_valores <- vif(modelo)
+
+# Exibir os valores
+print(vif_valores)
+
+# --- Diagnóstico Rápido ---
+# Se VIF > 5 ou 10, há alta multicolineariedade
+print(vif_valores[vif_valores > 5])
 ```
 
