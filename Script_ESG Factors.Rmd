@@ -409,11 +409,13 @@ df_regressao_atualizado <-
 anyNA(df_regressao_atualizado)
 
 df_final <-
-  df_regressao |> 
-  mutate(Ano_Referencia = lubridate::year(Data)) |> 
-  left_join(df_regressao_atualizado) |> 
-  replace_na(list(Dummy_Tem_ESG = 0)) |> 
+  df_regressao |>
+  mutate(Ano_Referencia = lubridate::year(Data)) |>
+  left_join(df_regressao_atualizado) |>
+  replace_na(list(Dummy_Tem_ESG = 0)) |>
   select(-"Ano_Referencia")
+
+# df_final <- readRDS("df_final_limpo_v2.rds")
 
 View(df_final)
 
@@ -429,6 +431,14 @@ View(df_final)
 
 #df_regressao_limpo_sem_na <- na.omit(df_final)
 ```
+
+Remove tickers
+```{r}
+codigo_to_remove <- c("SYNE3", "AMAR3", "RCSL3")
+df_final <- filter(df_final, !Código %in% codigo_to_remove)
+```
+
+
 8. Winsorized (Strict)
 ```{r}
 table(df_final$Dummy_Tem_ESG)
