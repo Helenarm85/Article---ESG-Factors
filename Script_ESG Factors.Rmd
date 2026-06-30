@@ -118,27 +118,60 @@ obter_empresas_esg_por_data <- function(col_alvo, data_ref, lista_sheets) {
   
   if (length(lista_processada) == 0) return(NULL)
   
-  qtd_fundos_ativos_data <- length(lista_processada)
-  ativos_data <- list_rbind(lista_processada)
+  # Aqui a função retorna os dados que você precisa lá fora
+  return(list(
+    data = list_rbind(lista_processada),
+    qtd = length(lista_processada)
+  ))
+}
   
   # Calculate frequency of investment in stocks
+  definir_esg_list <- function(ativos_data, qtd_fundos_ativos_data, data_ref, percentual) { 
   ranking <- ativos_data %>%
     filter(`Tipo de investimento` == "Ações") %>%
     distinct(Nome_Fundo, Descrição) %>%
     count(Descrição, name = "Qtd_Fundos_Investindo", sort = TRUE)
   
   # Cutoff rule (1% ou 20% of active funds in that month)
-  corte_minimo <- qtd_fundos_ativos_data * 0.20  #1% ou 20% (Change the values here for 0.00001 for Y>=0.01 and 0.2 for Y>= 1)
+  corte_minimo <- qtd_fundos_ativos_data * percentual 
+  #0.20  #1% ou 20% (Change the values here for 0.00001 for Y>=0.01 and 0.2 for Y>= 1)
   
   empresas_esg <- ranking %>%
     filter(Qtd_Fundos_Investindo >= corte_minimo)
   
   return(list(
-    data = data_ref,
-    total_fundos_ativos = qtd_fundos_ativos_data,
+    #data = data_ref,
+    #total_fundos_ativos = qtd_fundos_ativos_data,
     vetor_nomes = empresas_esg$Descrição
   ))
-}
+  }
+
+  # 3. Iterate to find ESG Companies for each date
+# This generates the list 'resultados_consolidados' used later for tagging
+resultados_consolidados <- mapa_colunas_datas %>%
+  pmap(function(coluna_original, data_extraida) {
+    
+    # A) Extrai os dados puros para aquela data específica
+    temp <- obter_empresas_esg_por_data(coluna_original, data_extraida, all_sheets)
+    
+    if (is.null(temp)) return(NULL)
+    
+    # B) Aplica a função de corte dinâmico (Aqui você pode alterar entre 0.20 e 0.01)
+    percentual_escolhido <- 0.20 # MUDE AQUI PARA 0.01 SE QUISER O CENÁRIO DE 1%
+    
+    resultado_corte <- definir_esg_list(temp$data, temp$qtd, data_extraida, percentual_escolhido)
+    
+    # C) Retorna a estrutura EXATA que o restante do relatório (map_chr e Chunk 5) exige
+    return(list(
+      data = data_extraida,
+      vetor_nomes = resultado_corte$vetor_nomes
+    ))
+    
+  }) %>%
+  compact()
+
+names(resultados_consolidados) <- map_chr(resultados_consolidados, "data")
+
 
 # --- Function 3: Calculate 3-Year P/L Standard Deviation ---
 calcular_std_3anos <- function(ticker_alvo, data_corte, df_source) {
@@ -431,48 +464,46 @@ View(df_final)
 
 #df_regressao_limpo_sem_na <- na.omit(df_final)
 ```
-
-Remove tickers
-```{r}
-codigo_to_remove <- c("SYNE3", "AMAR3", "RCSL3")
-df_final <- filter(df_final, !Código %in% codigo_to_remove)
-```
-
-
-8. Winsorized (Strict)
+ 
+  # --- SEÇÃO 7 & 8: TRATAMENTO DE DADOS ---
+  8. Winsorized (Strict)
 ```{r}
 table(df_final$Dummy_Tem_ESG)
-```
 
-Creating the specific dataset df_winsorized for robust models.
-```{r include=FALSE}
-# 1. Define the numeric columns (Same as before)
+# 1. Definição da função de Winsorização (Faça isso no início do script)
+winsorize_vector <- function(x, probs = c(0.01, 0.99)) {
+  if (all(is.na(x))) return(x)
+  bounds <- quantile(x, probs = probs, na.rm = TRUE)
+  pmax(bounds[1], pmin(x, bounds[2]))
+}
+
 colunas_numericas <- c("Dividend_Yield", "Debt_Assets", "ROA", "ROE", 
                        "Gross_Margin", "EBITDA_Margin", "Net_Margin", 
                        "Total_Assets", "std_dev_3y_PL")
 
-# 2. Define a helper function for Winsorization
-# This caps values at the bottom 1% and top 99%
-#test a new vakue 0.025 , 0.975
-winsorize_vector <- function(x, probs = c(0.01, 0.99)) {
-  if (all(is.na(x))) return(x) # Handle empty columns
-  
-  # Calculate the quantiles
-  bounds <- quantile(x, probs = probs, na.rm = TRUE)
-  
-  # Replace values below lower bound with lower bound
-  # Replace values above upper bound with upper bound
-  pmax(bounds[1], pmin(x, bounds[2]))
-}
+# 2. Criação da Base Higienizada (Sua "Base de Comparação")
+df_limpa_sem_wins <- df_regressao %>%
+  filter(!Código %in% c("SYNE3", "AMAR3", "RCSL3")) %>%
+  filter(EBITDA_Margin > -500 & EBITDA_Margin < 500) %>%
+  filter(ROE > -500 & ROE < 500) %>%
+  filter(is.finite(Debt_Assets), is.finite(ROA)) %>%
+  mutate(log_Total_Assets = log(Total_Assets))
 
-# 3. Apply Winsorization using mutate and across
-df_winsorized <- df_final %>%
-  mutate(across(all_of(colunas_numericas), ~ winsorize_vector(.)))
+# 3. Criação da Base Oficial (Sua "Base Final Winsorizada")
+# Agora, aplicamos a transformação apenas uma vez sobre a base já limpa
+df_final <- df_limpa_sem_wins %>%
+  mutate(across(all_of(colunas_numericas), ~ winsorize_vector(.))) %>%
+  mutate(log_Total_Assets = log(Total_Assets)) # Atualiza o log com os valores winsorizados
 
-# 4. Verification
-cat("Original rows:", nrow(df_final), "\n")
-cat("Rows after Winsorization:", nrow(df_winsorized), "(Should be identical)\n")
+# 4. Verificação Final (Para ter certeza que funcionou)
+cat("Linhas na base limpa:", nrow(df_limpa_sem_wins), "\n")
+cat("Linhas na base final:", nrow(df_final), "\n")
+cat("Máximo ROE (Final):", max(df_final$ROE, na.rm=T), "\n")
+
+
 ```
+
+
 9. Analysis: Regression Models
 
 This section contains the final 4 models specified in the original script.
@@ -481,7 +512,7 @@ This section contains the final 4 models specified in the original script.
 # Uses the dataset with outliers removed but NAs handled
 # Note: Using df_regressao_limpo_sem_na for the first pooled check as per original flow
 modelo_pooled_full <- glm(Empresa_ESG ~ Dividend_Yield + Debt_Assets + ROA + ROE + 
-                            Gross_Margin + EBITDA_Margin + Net_Margin + log(Total_Assets) + Dummy_Tem_ESG, 
+                            Gross_Margin + EBITDA_Margin + Net_Margin + log_Total_Assets + Dummy_Tem_ESG, 
                           data = df_final, 
                           family = binomial(link = "logit"))
 summary(modelo_pooled_full)
@@ -489,7 +520,7 @@ summary(modelo_pooled_full)
 # --- Model 2: Pooled Logit with ESG Dummy (Winsorized) ---
 # Adds the Dummy_Tem_ESG variable
 modelo_pooled_esg_winsorized <- glm(Empresa_ESG ~ Dividend_Yield + Debt_Assets + ROA + ROE + 
-                                        Gross_Margin + EBITDA_Margin + Net_Margin + log(Total_Assets) + 
+                                        Gross_Margin + EBITDA_Margin + Net_Margin + log_Total_Assets + 
                                         Dummy_Tem_ESG, 
                                       data = df_winsorized, 
                                       family = binomial(link = "logit"))
@@ -500,7 +531,7 @@ summary(modelo_pooled_esg_winsorized)
 # The most robust specification: Fixed Effects for Firm and Time (Date)
 # Uses log(Total_Assets) for scaling
 modelo_painel_full <- feglm(Empresa_ESG ~ Dividend_Yield + Debt_Assets + ROA + ROE + 
-                         Gross_Margin + EBITDA_Margin + Net_Margin + log(Total_Assets) + 
+                         Gross_Margin + EBITDA_Margin + Net_Margin + log_Total_Assets + 
                          Dummy_Tem_ESG | Nome + Data,
                        data = df_final, # Using df_final or df_winsorized based on preference
                        family = binomial("logit"))
@@ -512,7 +543,7 @@ summary(modelo_painel_full)
 # The most robust specification: Fixed Effects for Firm and Time (Date)
 # Uses log(Total_Assets) for scaling
 modelo_painel_winsorized <- feglm(Empresa_ESG ~ Dividend_Yield + Debt_Assets + ROA + ROE + 
-                         Gross_Margin + EBITDA_Margin + Net_Margin + log(Total_Assets) + 
+                         Gross_Margin + EBITDA_Margin + Net_Margin + log_Total_Assets + 
                          Dummy_Tem_ESG | Nome + Data,
                        data = df_winsorized, # Using df_final or df_winsorized based on preference
                        family = binomial("logit"))
@@ -527,7 +558,7 @@ summary(modelo_painel_winsorized)
 # Uses the dataset with outliers removed but NAs handled
 # Note: Using df_regressao_limpo_sem_na for the first pooled check as per original flow
 modelo_pooled_full_probit <- glm(Empresa_ESG ~ Dividend_Yield + Debt_Assets + ROA + ROE + 
-                            Gross_Margin + EBITDA_Margin + Net_Margin + log(Total_Assets) + Dummy_Tem_ESG, 
+                            Gross_Margin + EBITDA_Margin + Net_Margin + log_Total_Assets + Dummy_Tem_ESG, 
                           data = df_final, 
                           family = binomial(link = "probit"))
 summary(modelo_pooled_full_probit)
@@ -535,7 +566,7 @@ summary(modelo_pooled_full_probit)
 # --- Model 2: Pooled Probit with ESG Dummy (Winsorized) ---
 # Adds the Dummy_Tem_ESG variable
 modelo_pooled_esg_winsorized_probit <- glm(Empresa_ESG ~ Dividend_Yield + Debt_Assets + ROA + ROE + 
-                                        Gross_Margin + EBITDA_Margin + Net_Margin + log(Total_Assets) + 
+                                        Gross_Margin + EBITDA_Margin + Net_Margin + log_Total_Assets + 
                                         Dummy_Tem_ESG, 
                                       data = df_winsorized, 
                                       family = binomial(link = "probit"))
@@ -546,7 +577,7 @@ summary(modelo_pooled_esg_winsorized_probit)
 # The most robust specification: Fixed Effects for Firm and Time (Date)
 # Uses log(Total_Assets) for scaling
 modelo_painel_full_probit <- feglm(Empresa_ESG ~ Dividend_Yield + Debt_Assets + ROA + ROE + 
-                         Gross_Margin + EBITDA_Margin + Net_Margin + log(Total_Assets) + 
+                         Gross_Margin + EBITDA_Margin + Net_Margin + log_Total_Assets + 
                          Dummy_Tem_ESG | Nome + Data,
                        data = df_regressao_limpo_sem_na, # Using df_final or df_winsorized based on preference
                        family = binomial("probit"))
@@ -558,7 +589,7 @@ summary(modelo_painel_full_probit)
 # The most robust specification: Fixed Effects for Firm and Time (Date)
 # Uses log(Total_Assets) for scaling
 modelo_painel_winsorized_probit <- feglm(Empresa_ESG ~ Dividend_Yield + Debt_Assets + ROA + ROE + 
-                         Gross_Margin + EBITDA_Margin + Net_Margin + log(Total_Assets) + 
+                         Gross_Margin + EBITDA_Margin + Net_Margin + log_Total_Assets + 
                          Dummy_Tem_ESG | Nome + Data,
                        data = df_winsorized, # Using df_final or df_winsorized based on preference
                        family = binomial("probit"))
@@ -743,8 +774,8 @@ library(car)      # Para calcular o VIF
 
 data_for_desc_stat <-
   df_final %>% 
-  select(where(is.numeric)) %>% 
-  select(-"Dummy_Tem_ESG", -"Ano_Referencia", -"std_dev_3y_PL")
+  select(where(is.numeric)) 
+  #select(-"Dummy_Tem_ESG", -"Ano_Referencia", -"std_dev_3y_PL")
 
 ## Basic summary - Statistic discriptive and Correlation matrix
 # 1. LOG TOTAL ASSETS (FAÇA PRIMEIRO)
@@ -793,4 +824,9 @@ print(vif_valores)
 # Se VIF > 5 ou 10, há alta multicolineariedade
 print(vif_valores[vif_valores > 5])
 ```
+# Verificar os limites atuais do df_final (após o script rodar tudo)
+summary(df_final$ROE)
+summary(df_final$EBITDA_Margin)
 
+# Se os valores de Min/Max ainda estiverem na casa dos milhares (ex: -13.000 ou 4.000), 
+# significa que a limpeza não foi aplicada ou o df_final foi sobrescrito por erro.
