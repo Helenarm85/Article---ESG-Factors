@@ -146,33 +146,6 @@ obter_empresas_esg_por_data <- function(col_alvo, data_ref, lista_sheets) {
   ))
   }
 
-  # 3. Iterate to find ESG Companies for each date
-# This generates the list 'resultados_consolidados' used later for tagging
-# resultados_consolidados <- mapa_colunas_datas %>%
-#   pmap(function(coluna_original, data_extraida) {
-#     
-#     # A) Extrai os dados puros para aquela data específica
-#     temp <- obter_empresas_esg_por_data(coluna_original, data_extraida, all_sheets)
-#     
-#     if (is.null(temp)) return(NULL)
-#     
-#     # B) Aplica a função de corte dinâmico (Aqui você pode alterar entre 0.20 e 0.01)
-#     percentual_escolhido <- 0.20 # MUDE AQUI PARA 0.01 SE QUISER O CENÁRIO DE 1%
-#     
-#     resultado_corte <- definir_esg_list(temp$data, temp$qtd, data_extraida, percentual_escolhido)
-#     
-#     # C) Retorna a estrutura EXATA que o restante do relatório (map_chr e Chunk 5) exige
-#     return(list(
-#       data = data_extraida,
-#       vetor_nomes = resultado_corte$vetor_nomes
-#     ))
-#     
-#   }) %>%
-#   compact()
-# 
-# names(resultados_consolidados) <- map_chr(resultados_consolidados, "data")
-
-
 # --- Function 3: Calculate 3-Year P/L Standard Deviation ---
 calcular_std_3anos <- function(ticker_alvo, data_corte, df_source) {
   data_inicio <- data_corte - years(3)
@@ -267,18 +240,6 @@ mapa_colunas_datas <- tibble(coluna_original = colunas_mestra) %>%
 
 # 3. Iterate to find ESG Companies for each date
 # This generates the list 'resultados_consolidados' used later for tagging
-# resultados_consolidados <- mapa_colunas_datas %>%
-#   pmap(function(coluna_original, data_extraida) {
-#     obter_empresas_esg_por_data(coluna_original, data_extraida, all_sheets)
-#   }) %>%
-#   compact()
-# 
-# names(resultados_consolidados) <- map_chr(resultados_consolidados, "data")
-# print(paste("ESG classifications generated for", length(resultados_consolidados), "periods."))
-
-```
-
-```{r}
 resultados_consolidados <- mapa_colunas_datas %>%
   pmap(function(coluna_original, data_extraida) {
     
