@@ -148,29 +148,29 @@ obter_empresas_esg_por_data <- function(col_alvo, data_ref, lista_sheets) {
 
   # 3. Iterate to find ESG Companies for each date
 # This generates the list 'resultados_consolidados' used later for tagging
-resultados_consolidados <- mapa_colunas_datas %>%
-  pmap(function(coluna_original, data_extraida) {
-    
-    # A) Extrai os dados puros para aquela data específica
-    temp <- obter_empresas_esg_por_data(coluna_original, data_extraida, all_sheets)
-    
-    if (is.null(temp)) return(NULL)
-    
-    # B) Aplica a função de corte dinâmico (Aqui você pode alterar entre 0.20 e 0.01)
-    percentual_escolhido <- 0.20 # MUDE AQUI PARA 0.01 SE QUISER O CENÁRIO DE 1%
-    
-    resultado_corte <- definir_esg_list(temp$data, temp$qtd, data_extraida, percentual_escolhido)
-    
-    # C) Retorna a estrutura EXATA que o restante do relatório (map_chr e Chunk 5) exige
-    return(list(
-      data = data_extraida,
-      vetor_nomes = resultado_corte$vetor_nomes
-    ))
-    
-  }) %>%
-  compact()
-
-names(resultados_consolidados) <- map_chr(resultados_consolidados, "data")
+# resultados_consolidados <- mapa_colunas_datas %>%
+#   pmap(function(coluna_original, data_extraida) {
+#     
+#     # A) Extrai os dados puros para aquela data específica
+#     temp <- obter_empresas_esg_por_data(coluna_original, data_extraida, all_sheets)
+#     
+#     if (is.null(temp)) return(NULL)
+#     
+#     # B) Aplica a função de corte dinâmico (Aqui você pode alterar entre 0.20 e 0.01)
+#     percentual_escolhido <- 0.20 # MUDE AQUI PARA 0.01 SE QUISER O CENÁRIO DE 1%
+#     
+#     resultado_corte <- definir_esg_list(temp$data, temp$qtd, data_extraida, percentual_escolhido)
+#     
+#     # C) Retorna a estrutura EXATA que o restante do relatório (map_chr e Chunk 5) exige
+#     return(list(
+#       data = data_extraida,
+#       vetor_nomes = resultado_corte$vetor_nomes
+#     ))
+#     
+#   }) %>%
+#   compact()
+# 
+# names(resultados_consolidados) <- map_chr(resultados_consolidados, "data")
 
 
 # --- Function 3: Calculate 3-Year P/L Standard Deviation ---
@@ -267,16 +267,45 @@ mapa_colunas_datas <- tibble(coluna_original = colunas_mestra) %>%
 
 # 3. Iterate to find ESG Companies for each date
 # This generates the list 'resultados_consolidados' used later for tagging
+# resultados_consolidados <- mapa_colunas_datas %>%
+#   pmap(function(coluna_original, data_extraida) {
+#     obter_empresas_esg_por_data(coluna_original, data_extraida, all_sheets)
+#   }) %>%
+#   compact()
+# 
+# names(resultados_consolidados) <- map_chr(resultados_consolidados, "data")
+# print(paste("ESG classifications generated for", length(resultados_consolidados), "periods."))
+
+```
+
+```{r}
 resultados_consolidados <- mapa_colunas_datas %>%
   pmap(function(coluna_original, data_extraida) {
-    obter_empresas_esg_por_data(coluna_original, data_extraida, all_sheets)
+    
+    # A) Extrai os dados puros para aquela data específica
+    temp <- obter_empresas_esg_por_data(coluna_original, data_extraida, all_sheets)
+    
+    if (is.null(temp)) return(NULL)
+    
+    # B) Aplica a função de corte dinâmico (Aqui você pode alterar entre 0.20 e 0.01)
+    percentual_escolhido <- 0.20 # MUDE AQUI PARA 0.01 SE QUISER O CENÁRIO DE 1%
+    
+    resultado_corte <- definir_esg_list(temp$data, temp$qtd, data_extraida, percentual_escolhido)
+    
+    # C) Retorna a estrutura EXATA que o restante do relatório (map_chr e Chunk 5) exige
+    return(list(
+      data = data_extraida,
+      vetor_nomes = resultado_corte$vetor_nomes
+    ))
+    
   }) %>%
   compact()
 
 names(resultados_consolidados) <- map_chr(resultados_consolidados, "data")
-print(paste("ESG classifications generated for", length(resultados_consolidados), "periods."))
 
+print(paste("ESG classifications generated for", length(resultados_consolidados), "periods."))
 ```
+
 
 5. Processing Phase II: Financial Indicators
 
@@ -482,23 +511,20 @@ colunas_numericas <- c("Dividend_Yield", "Debt_Assets", "ROA", "ROE",
                        "Total_Assets", "std_dev_3y_PL")
 
 # 2. Criação da Base Higienizada (Sua "Base de Comparação")
-df_limpa_sem_wins <- df_regressao %>%
+df_limpa_sem_wins <- df_final %>%
   filter(!Código %in% c("SYNE3", "AMAR3", "RCSL3")) %>%
   filter(EBITDA_Margin > -500 & EBITDA_Margin < 500) %>%
   filter(ROE > -500 & ROE < 500) %>%
   filter(is.finite(Debt_Assets), is.finite(ROA)) %>%
-  mutate(log_Total_Assets = log(Total_Assets))
+  mutate(log_Total_Assets = log(Total_Assets)) %>%
+  mutate(across(all_of(colunas_numericas), ~ winsorize_vector(.)))
 
-# 3. Criação da Base Oficial (Sua "Base Final Winsorizada")
-# Agora, aplicamos a transformação apenas uma vez sobre a base já limpa
-df_final <- df_limpa_sem_wins %>%
-  mutate(across(all_of(colunas_numericas), ~ winsorize_vector(.))) %>%
-  mutate(log_Total_Assets = log(Total_Assets)) # Atualiza o log com os valores winsorizados
 
 # 4. Verificação Final (Para ter certeza que funcionou)
 cat("Linhas na base limpa:", nrow(df_limpa_sem_wins), "\n")
 cat("Linhas na base final:", nrow(df_final), "\n")
 cat("Máximo ROE (Final):", max(df_final$ROE, na.rm=T), "\n")
+cat("Máximo ROE (limpa):", max(df_limpa_sem_wins$ROE, na.rm=T), "\n")
 
 
 ```
@@ -512,7 +538,7 @@ This section contains the final 4 models specified in the original script.
 # Uses the dataset with outliers removed but NAs handled
 # Note: Using df_regressao_limpo_sem_na for the first pooled check as per original flow
 modelo_pooled_full <- glm(Empresa_ESG ~ Dividend_Yield + Debt_Assets + ROA + ROE + 
-                            Gross_Margin + EBITDA_Margin + Net_Margin + log_Total_Assets + Dummy_Tem_ESG, 
+                            Gross_Margin + EBITDA_Margin + Net_Margin + log(Total_Assets) + Dummy_Tem_ESG, 
                           data = df_final, 
                           family = binomial(link = "logit"))
 summary(modelo_pooled_full)
@@ -522,7 +548,7 @@ summary(modelo_pooled_full)
 modelo_pooled_esg_winsorized <- glm(Empresa_ESG ~ Dividend_Yield + Debt_Assets + ROA + ROE + 
                                         Gross_Margin + EBITDA_Margin + Net_Margin + log_Total_Assets + 
                                         Dummy_Tem_ESG, 
-                                      data = df_winsorized, 
+                                      data = df_limpa_sem_wins, 
                                       family = binomial(link = "logit"))
 summary(modelo_pooled_esg_winsorized)
 
@@ -531,7 +557,7 @@ summary(modelo_pooled_esg_winsorized)
 # The most robust specification: Fixed Effects for Firm and Time (Date)
 # Uses log(Total_Assets) for scaling
 modelo_painel_full <- feglm(Empresa_ESG ~ Dividend_Yield + Debt_Assets + ROA + ROE + 
-                         Gross_Margin + EBITDA_Margin + Net_Margin + log_Total_Assets + 
+                         Gross_Margin + EBITDA_Margin + Net_Margin + log(Total_Assets) + 
                          Dummy_Tem_ESG | Nome + Data,
                        data = df_final, # Using df_final or df_winsorized based on preference
                        family = binomial("logit"))
@@ -545,12 +571,10 @@ summary(modelo_painel_full)
 modelo_painel_winsorized <- feglm(Empresa_ESG ~ Dividend_Yield + Debt_Assets + ROA + ROE + 
                          Gross_Margin + EBITDA_Margin + Net_Margin + log_Total_Assets + 
                          Dummy_Tem_ESG | Nome + Data,
-                       data = df_winsorized, # Using df_final or df_winsorized based on preference
+                       data = df_limpa_sem_wins, # Using df_final or df_winsorized based on preference
                        family = binomial("logit"))
 
 summary(modelo_painel_winsorized)
-
-
 
 ```
 ```{r echo=FALSE}
@@ -558,7 +582,7 @@ summary(modelo_painel_winsorized)
 # Uses the dataset with outliers removed but NAs handled
 # Note: Using df_regressao_limpo_sem_na for the first pooled check as per original flow
 modelo_pooled_full_probit <- glm(Empresa_ESG ~ Dividend_Yield + Debt_Assets + ROA + ROE + 
-                            Gross_Margin + EBITDA_Margin + Net_Margin + log_Total_Assets + Dummy_Tem_ESG, 
+                            Gross_Margin + EBITDA_Margin + Net_Margin + log(Total_Assets) + Dummy_Tem_ESG, 
                           data = df_final, 
                           family = binomial(link = "probit"))
 summary(modelo_pooled_full_probit)
@@ -568,7 +592,7 @@ summary(modelo_pooled_full_probit)
 modelo_pooled_esg_winsorized_probit <- glm(Empresa_ESG ~ Dividend_Yield + Debt_Assets + ROA + ROE + 
                                         Gross_Margin + EBITDA_Margin + Net_Margin + log_Total_Assets + 
                                         Dummy_Tem_ESG, 
-                                      data = df_winsorized, 
+                                      data = df_limpa_sem_wins, 
                                       family = binomial(link = "probit"))
 summary(modelo_pooled_esg_winsorized_probit)
 
@@ -577,9 +601,9 @@ summary(modelo_pooled_esg_winsorized_probit)
 # The most robust specification: Fixed Effects for Firm and Time (Date)
 # Uses log(Total_Assets) for scaling
 modelo_painel_full_probit <- feglm(Empresa_ESG ~ Dividend_Yield + Debt_Assets + ROA + ROE + 
-                         Gross_Margin + EBITDA_Margin + Net_Margin + log_Total_Assets + 
+                         Gross_Margin + EBITDA_Margin + Net_Margin + log(Total_Assets) + 
                          Dummy_Tem_ESG | Nome + Data,
-                       data = df_regressao_limpo_sem_na, # Using df_final or df_winsorized based on preference
+                       data = df_final, # Using df_final or df_winsorized based on preference
                        family = binomial("probit"))
 
 summary(modelo_painel_full_probit)
@@ -591,7 +615,7 @@ summary(modelo_painel_full_probit)
 modelo_painel_winsorized_probit <- feglm(Empresa_ESG ~ Dividend_Yield + Debt_Assets + ROA + ROE + 
                          Gross_Margin + EBITDA_Margin + Net_Margin + log_Total_Assets + 
                          Dummy_Tem_ESG | Nome + Data,
-                       data = df_winsorized, # Using df_final or df_winsorized based on preference
+                       data = df_limpa_sem_wins, # Using df_final or df_winsorized based on preference
                        family = binomial("probit"))
 
 # Functions:
